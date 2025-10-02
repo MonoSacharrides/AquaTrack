@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "localforage": "^1.10.0",
+    "sweetalert2": "^11.23.0"
+  }
+}

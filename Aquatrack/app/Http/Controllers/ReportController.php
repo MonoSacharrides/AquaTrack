@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
@@ -49,25 +50,26 @@ class ReportController extends Controller
     public function getReportStats()
     {
         try {
-            // Total Reports (excluding deleted)
-            $totalReports = Report::whereNull('deleted_at')->count();
+            // Count only main reports (not merged references)
+            $totalReports = Report::whereNull('deleted_at')
+                ->where('is_merged_reference', false)
+                ->count();
 
-            // Resolved Reports (excluding deleted)
             $resolvedReports = Report::where('status', 'resolved')
                 ->whereNull('deleted_at')
+                ->where('is_merged_reference', false)
                 ->count();
 
-            // Pending Reports
             $pendingReports = Report::where('status', 'pending')
                 ->whereNull('deleted_at')
+                ->where('is_merged_reference', false)
                 ->count();
 
-            // In Progress Reports
             $inProgressReports = Report::where('status', 'in_progress')
                 ->whereNull('deleted_at')
+                ->where('is_merged_reference', false)
                 ->count();
 
-            // Calculate resolution percentage (avoid division by zero)
             $resolutionPercentage = $totalReports > 0
                 ? round(($resolvedReports / $totalReports) * 100, 1)
                 : 0;
@@ -97,14 +99,12 @@ class ReportController extends Controller
     public function getDashboardStats()
     {
         try {
-            // User statistics
             $activeUsers = User::where('enabled', true)->count();
             $totalUsers = User::count();
             $newUsersThisMonth = User::whereYear('created_at', now()->year)
                 ->whereMonth('created_at', now()->month)
                 ->count();
 
-            // Report statistics
             $reportStats = $this->getReportStats();
 
             return array_merge([
@@ -127,36 +127,33 @@ class ReportController extends Controller
         }
     }
 
-
     /**
-     * Improved method to find existing reports for merging
+     * Find existing report for merging
      */
     protected function findExistingReportForMerging($zone, $barangay, $issueType, $latitude, $longitude, $purok)
     {
         try {
-            $radius = 5; // meters
-            $earthRadius = 6371000; // meters
+            $radius = 5;
+            $earthRadius = 6371000;
 
             if (!is_numeric($latitude) || !is_numeric($longitude)) {
                 throw new \Exception('Invalid latitude or longitude values');
             }
 
-            // First get all potential matches by basic criteria
             $potentialReports = Report::where('zone', $zone)
                 ->where('barangay', $barangay)
                 ->where('water_issue_type', $issueType)
                 ->where('purok', $purok)
                 ->whereNull('deleted_at')
-                ->where('status', '!=', 'resolved') // Don't merge with resolved reports
+                ->where('is_merged_reference', false)
+                ->where('status', '!=', 'resolved')
                 ->get();
 
-            // Now filter by distance using more accurate Haversine formula
             $matchingReports = $potentialReports->filter(function ($report) use ($latitude, $longitude, $radius, $earthRadius) {
                 if (is_null($report->latitude) || is_null($report->longitude)) {
                     return false;
                 }
 
-                // Haversine formula for accurate distance calculation
                 $latFrom = deg2rad($latitude);
                 $lonFrom = deg2rad($longitude);
                 $latTo = deg2rad($report->latitude);
@@ -259,7 +256,7 @@ class ReportController extends Controller
             $barangay = $validated['barangay'];
             $purok = $validated['purok'];
 
-            // Find existing report to merge with using improved method
+            // Find existing report to merge with
             $existingReport = $this->findExistingReportForMerging($zone, $barangay, $issueType, $latitude, $longitude, $purok);
 
             $trackingCode = null;
@@ -268,24 +265,45 @@ class ReportController extends Controller
             $mainReport = null;
 
             if ($existingReport) {
-                // Merge with existing report - use the main tracking code
+                // MERGE WITH EXISTING REPORT - SIMPLE APPROACH
                 $trackingCode = $existingReport->tracking_code;
                 $reportId = $existingReport->id;
                 $isMerged = true;
                 $mainReport = $existingReport;
 
-                // Update reporter names (merge)
-                $newReporters = trim($existingReport->reporter_name . ', ' . $validated['reporter_name']);
-                $existingReport->reporter_name = $newReporters;
+                // Update reporter names - combine all reporters
+                $existingReporters = array_filter(array_map('trim', explode(',', $existingReport->reporter_name)));
+                $newReporter = trim($validated['reporter_name']);
 
-                // Update reporter phones if provided
-                if ($validated['reporter_phone']) {
-                    $existingPhones = $existingReport->reporter_phone ? explode(',', $existingReport->reporter_phone) : [];
-                    $existingPhones[] = $validated['reporter_phone'];
-                    $existingReport->reporter_phone = implode(', ', array_filter(array_unique($existingPhones)));
+                if (!in_array($newReporter, $existingReporters)) {
+                    $existingReporters[] = $newReporter;
                 }
 
-                // Update additional tracking codes (unlimited merges)
+                $existingReport->reporter_name = implode(', ', $existingReporters);
+
+                // UPDATE USER TYPES - Combine user types like "Registered, Guest"
+                $existingUserTypes = $existingReport->user_types ? json_decode($existingReport->user_types, true) : [];
+                if (!is_array($existingUserTypes)) $existingUserTypes = [];
+                
+                $currentUserType = Auth::check() ? 'Registered' : 'Guest';
+                if (!in_array($currentUserType, $existingUserTypes)) {
+                    $existingUserTypes[] = $currentUserType;
+                }
+                
+                $existingReport->user_types = json_encode($existingUserTypes);
+
+                // Update reporter phones
+                if ($validated['reporter_phone']) {
+                    $existingPhones = $existingReport->reporter_phone ? array_filter(array_map('trim', explode(',', $existingReport->reporter_phone))) : [];
+                    $newPhone = trim($validated['reporter_phone']);
+
+                    if (!in_array($newPhone, $existingPhones)) {
+                        $existingPhones[] = $newPhone;
+                        $existingReport->reporter_phone = implode(', ', $existingPhones);
+                    }
+                }
+
+                // Update additional tracking codes
                 $additionalCodes = $existingReport->additional_tracking_codes ? json_decode($existingReport->additional_tracking_codes, true) : [];
                 if (!is_array($additionalCodes)) $additionalCodes = [];
 
@@ -293,9 +311,32 @@ class ReportController extends Controller
                 $additionalCodes[] = $newTrackingCode;
                 $existingReport->additional_tracking_codes = json_encode(array_unique($additionalCodes));
 
-                // Append new description to existing one
-                if ($validated['description'] !== $existingReport->description) {
-                    $existingReport->description = $existingReport->description . "\n\n--- Additional Report ---\n" . $validated['description'];
+                // Append new description in the format you want
+                $newDescription = "Additional Report From {$validated['reporter_name']}\n-> {$validated['description']}\n";
+                $existingReport->description = $existingReport->description . "\n" . $newDescription;
+
+                // Add photos to the main report (for both guest and registered users)
+                foreach ($request->file('photos') as $photo) {
+                    $originalName = $photo->getClientOriginalName();
+                    $extension = $photo->getClientOriginalExtension();
+                    $filename = Str::uuid() . '.' . $extension;
+                    $path = $photo->storeAs('report-photos', $filename, 'public');
+
+                    ReportPhoto::create([
+                        'report_id' => $existingReport->id,
+                        'path' => $path,
+                        'original_name' => $originalName,
+                        'mime_type' => $photo->getClientMimeType(),
+                        'size' => $photo->getSize(),
+                    ]);
+                }
+
+                // For registered users, also update their user_id in the main report
+                if (Auth::check()) {
+                    // If the existing report doesn't have a user_id, set it to the current user
+                    if (!$existingReport->user_id) {
+                        $existingReport->user_id = Auth::id();
+                    }
                 }
 
                 $existingReport->save();
@@ -304,14 +345,19 @@ class ReportController extends Controller
                     'report_id' => $reportId,
                     'tracking_code' => $trackingCode,
                     'new_tracking_code' => $newTrackingCode,
-                    'merged_reporters' => $newReporters,
+                    'merged_reporters' => $existingReport->reporter_name,
+                    'user_types' => $existingReport->user_types,
+                    'user_type' => Auth::check() ? 'registered' : 'guest',
                 ]);
             } else {
-                // Create new report
+                // CREATE NEW REPORT
                 $datePart = now()->format('Ymd');
                 $randomPart = strtoupper(Str::random(4));
                 $trackingCode = 'AQT' . $datePart . '-' . $randomPart;
                 Log::debug('Generated new tracking code', ['tracking_code' => $trackingCode]);
+
+                // Set initial user types
+                $userTypes = [Auth::check() ? 'Registered' : 'Guest'];
 
                 $reportData = [
                     'municipality' => $validated['municipality'],
@@ -329,36 +375,38 @@ class ReportController extends Controller
                     'tracking_code' => $trackingCode,
                     'latitude' => $validated['latitude'],
                     'longitude' => $validated['longitude'],
-                    'priority' => $this->base_priorities[$issueType] ?? 'low', // Set initial priority
+                    'priority' => $this->base_priorities[$issueType] ?? 'low',
+                    'is_merged_reference' => false,
+                    'user_types' => json_encode($userTypes), // Store initial user type
                 ];
 
                 $report = Report::create($reportData);
                 $reportId = $report->id;
                 $mainReport = $report;
 
+                foreach ($request->file('photos') as $photo) {
+                    $originalName = $photo->getClientOriginalName();
+                    $extension = $photo->getClientOriginalExtension();
+                    $filename = Str::uuid() . '.' . $extension;
+                    $path = $photo->storeAs('report-photos', $filename, 'public');
+
+                    ReportPhoto::create([
+                        'report_id' => $reportId,
+                        'path' => $path,
+                        'original_name' => $originalName,
+                        'mime_type' => $photo->getClientMimeType(),
+                        'size' => $photo->getSize(),
+                    ]);
+                }
+
                 Log::info('New report created', [
                     'report_id' => $reportId,
                     'tracking_code' => $trackingCode,
+                    'user_type' => Auth::check() ? 'registered' : 'guest',
                 ]);
             }
 
-            // Always add photos to the report ID (merged or new)
-            foreach ($request->file('photos') as $photo) {
-                $originalName = $photo->getClientOriginalName();
-                $extension = $photo->getClientOriginalExtension();
-                $filename = Str::uuid() . '.' . $extension;
-                $path = $photo->storeAs('report-photos', $filename, 'public');
-
-                ReportPhoto::create([
-                    'report_id' => $reportId,
-                    'path' => $path,
-                    'original_name' => $originalName,
-                    'mime_type' => $photo->getClientMimeType(),
-                    'size' => $photo->getSize(),
-                ]);
-            }
-
-            // Determine and set priority based on number of reporters
+            // Update priority based on number of reporters
             if ($mainReport) {
                 $base_priority = $this->base_priorities[$issueType] ?? 'low';
                 $reporters = explode(',', $mainReport->reporter_name);
@@ -373,7 +421,7 @@ class ReportController extends Controller
                     }
                 } elseif ($base_priority === 'medium' && $num_reporters >= 3) {
                     $priority = 'high';
-                } // High priority issues remain 'high' regardless of reporter count
+                }
 
                 if ($mainReport->priority != $priority) {
                     $mainReport->priority = $priority;
@@ -388,7 +436,7 @@ class ReportController extends Controller
                 }
             }
 
-            // Log activity for new reports only
+            // Log activity
             if (!$isMerged) {
                 Activity::create([
                     'event' => 'report_created',
@@ -401,10 +449,10 @@ class ReportController extends Controller
                         'tracking_code' => $trackingCode,
                         'zone' => $validated['zone'],
                         'status' => 'pending',
+                        'user_type' => Auth::check() ? 'registered' : 'guest',
                     ],
                 ]);
             } else {
-                // Log merging activity
                 Activity::create([
                     'event' => 'report_merged',
                     'description' => 'Report merged into existing report: ' . $trackingCode,
@@ -414,9 +462,9 @@ class ReportController extends Controller
                     'causer_id' => Auth::id(),
                     'properties' => [
                         'main_tracking_code' => $trackingCode,
-                        'new_tracking_code' => $newTrackingCode ?? null,
                         'zone' => $validated['zone'],
                         'reporter_added' => $validated['reporter_name'],
+                        'user_type' => Auth::check() ? 'registered' : 'guest',
                     ],
                 ]);
             }
@@ -426,8 +474,8 @@ class ReportController extends Controller
                     ->with('swal', [
                         'icon' => 'success',
                         'title' => $isMerged ? 'Report Merged' : 'Report Submitted',
-                        'text' => $isMerged ? 'Your report has been merged with an existing one! Use this tracking code to monitor progress.' : 'Your report has been submitted successfully!',
-                        'trackingCode' => $trackingCode,
+                        'text' => $isMerged ? 'Your report has been merged with an existing one! Use the main tracking code to monitor progress.' : 'Your report has been submitted successfully!',
+                        'trackingCode' => $trackingCode, // Always return the main tracking code
                         'isMerged' => $isMerged,
                     ]);
             }
@@ -517,9 +565,16 @@ class ReportController extends Controller
     public function customerIndex(Request $request)
     {
         try {
+            // For customer side, show reports where:
+            // 1. The user_id matches the current user OR
+            // 2. The user is listed in the reporter_name of merged reports
             $reports = Report::with(['photos'])
-                ->where('user_id', Auth::id())
                 ->whereNull('deleted_at')
+                ->where('is_merged_reference', false)
+                ->where(function ($query) {
+                    $query->where('user_id', Auth::id())
+                        ->orWhere('reporter_name', 'LIKE', '%' . Auth::user()->name . '%');
+                })
                 ->latest()
                 ->paginate(10);
 
@@ -555,8 +610,8 @@ class ReportController extends Controller
             'dashboardStats' => [
                 'active_users' => $dashboardStats['active_users'],
                 'resolution_percentage' => $dashboardStats['resolution_percentage'],
-                'resolved_reports' => $dashboardStats['resolved_reports'], // Add this
-                'total_reports' => $dashboardStats['total_reports'], // Add this for context
+                'resolved_reports' => $dashboardStats['resolved_reports'],
+                'total_reports' => $dashboardStats['total_reports'],
             ],
         ]);
     }
@@ -564,8 +619,10 @@ class ReportController extends Controller
     public function adminIndex(Request $request)
     {
         try {
+            // SIMPLE FIX: Only show main reports that are NOT merged references
             $query = Report::with(['photos', 'user'])
                 ->whereNull('deleted_at')
+                ->where('is_merged_reference', false) // Only main reports
                 ->latest();
 
             if ($request->userType === 'guest') {
@@ -592,18 +649,15 @@ class ReportController extends Controller
             $reports = $query->paginate(5)
                 ->appends($request->query());
 
-            // Handle pre-selected report from query parameter
+            // Handle pre-selected report
             $selectedReport = null;
             if ($request->filled('report_id')) {
                 $selectedReport = Report::with(['photos', 'user'])->find($request->input('report_id'));
                 if (!$selectedReport || $selectedReport->deleted_at) {
-                    $selectedReport = null; // Reset if not found or deleted
-                } else {
-                    Log::info('Selected report found', ['report_id' => $request->input('report_id'), 'data' => $selectedReport->toArray()]);
+                    $selectedReport = null;
                 }
             }
 
-            // Get report statistics - FIXED: Added this line
             $reportStats = $this->getReportStats();
 
             return Inertia::render('Admin/Reports', [
@@ -614,7 +668,7 @@ class ReportController extends Controller
                 'swal' => $request->session()->get('swal'),
                 'selectedReport' => $selectedReport,
                 'report_id' => $request->input('report_id'),
-                'reportStats' => $reportStats, // FIXED: Now properly defined
+                'reportStats' => $reportStats,
             ]);
         } catch (\Exception $e) {
             Log::error('Admin reports fetch failed', ['error' => $e->getMessage()]);
@@ -629,7 +683,7 @@ class ReportController extends Controller
                     'text' => 'Failed to load reports.',
                 ],
                 'report_id' => $request->input('report_id'),
-                'reportStats' => $this->getReportStats(), // FIXED: Added fallback
+                'reportStats' => $this->getReportStats(),
             ]);
         }
     }
@@ -646,7 +700,7 @@ class ReportController extends Controller
             ]);
 
             $report = Report::with(['photos'])
-                ->withTrashed() // Include soft-deleted reports
+                ->withTrashed()
                 ->where(function ($query) use ($request) {
                     $query->where('tracking_code', $request->tracking_code)
                         ->orWhereJsonContains('additional_tracking_codes', $request->tracking_code);
@@ -663,12 +717,11 @@ class ReportController extends Controller
                 ]);
             }
 
-            // If the report is deleted, pass the deletion reason to the view
             if ($report->trashed()) {
                 return Inertia::render('Reports/Track', [
                     'report' => null,
                     'isDeleted' => true,
-                    'deletionReason' => $report->status, // Pass the deletion reason
+                    'deletionReason' => $report->status,
                 ]);
             }
 
@@ -695,7 +748,7 @@ class ReportController extends Controller
             ]);
 
             $report = Report::with(['photos'])
-                ->withTrashed() // Include soft-deleted reports
+                ->withTrashed()
                 ->where(function ($query) use ($request) {
                     $query->where('tracking_code', $request->tracking_code)
                         ->orWhereJsonContains('additional_tracking_codes', $request->tracking_code);
@@ -709,14 +762,13 @@ class ReportController extends Controller
                 ], 404);
             }
 
-            // If the report is soft-deleted, return a specific response
             if ($report->trashed()) {
                 return response()->json([
                     'success' => false,
                     'message' => 'This report has been deleted.',
                     'deleted' => true,
-                    'reason' => $report->status, // Return the deletion reason (e.g., "Deleted: [reason]")
-                ], 410); // HTTP 410 Gone is appropriate for deleted resources
+                    'reason' => $report->status,
+                ], 410);
             }
 
             return response()->json([
@@ -742,7 +794,6 @@ class ReportController extends Controller
             $oldStatus = $report->status;
             $newStatus = $request->status;
 
-            // Synchronize status for all linked reports (unlimited merges)
             $trackingCode = $report->tracking_code;
             $linkedReports = Report::where(function ($query) use ($trackingCode) {
                 $query->where('tracking_code', $trackingCode)
@@ -804,7 +855,7 @@ class ReportController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch statistics',
-                'data' => $this->getDashboardStats() // Return fallback data
+                'data' => $this->getDashboardStats()
             ], 500);
         }
     }

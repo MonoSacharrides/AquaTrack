@@ -59,17 +59,11 @@ Route::get('/dashboard', function () {
     return redirect()->route('home');
 })->name('dashboard')->middleware(['auth', 'verified']);
 
-
-// routes/web.php (Admin routes)
-Route::delete('/admin/reports/{report}', [ReportController::class, 'destroy'])
-    ->name('admin.reports.destroy');
-Route::post('/admin/reports/{report}/update-status', [ReportController::class, 'updateStatus'])
-    ->name('admin.reports.updateStatus');
-
 // Admin Routes
-
 Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/admin/dashboard', [AdminDashboardController::class, 'index'])->name('admin.dashboard');
+    
+    // ADMIN REPORTS ROUTES - Keep these inside the admin middleware
     Route::get('/admin/reports', [ReportController::class, 'adminIndex'])->name('admin.reports');
     Route::delete('/admin/reports/{report}', [ReportController::class, 'destroy'])->name('admin.reports.destroy');
     Route::post('/admin/reports/{report}/update-status', [ReportController::class, 'updateStatus'])->name('admin.reports.updateStatus');
@@ -85,7 +79,6 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     // Stats routes
     Route::get('/admin/stats', [AdminUsersController::class, 'getStats'])->name('admin.stats');
     Route::get('/reports/stats', [ReportController::class, 'getStats'])->name('reports.stats');
-
 
     Route::post('/admin/export-water-analytics', [AdminDashboardController::class, 'exportWaterAnalytics'])->name('admin.export-water-analytics');
 
@@ -113,9 +106,6 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::post('/notifications/mark-all-read', [NotificationController::class, 'markAllAsRead'])->name('notifications.mark-all-read');
 });
 
-
-
-
 // Staff Routes
 Route::middleware(['auth', 'role:staff'])->group(function () {
     Route::get('/staff/dashboard', [StaffDashboardController::class, 'index'])->name('staff.dashboard');
@@ -136,10 +126,8 @@ Route::middleware(['auth', 'role:staff'])->group(function () {
     })->name('staff.notifications');
 });
 
-
 // routes/web.php or routes/api.php
 Route::get('/staff/readings/{userId}/previous', [StaffReadingController::class, 'getPreviousReadings']);
-
 
 // Customer Routes
 Route::middleware(['auth', 'role:customer'])->group(function () {
@@ -157,7 +145,6 @@ Route::middleware(['auth', 'role:customer'])->group(function () {
     })->name('customer.notifications');
 });
 
-
 Route::post('/reports/sync-offline', [ReportController::class, 'syncOfflineReports'])->name('reports.sync-offline');
 
 // Select Roles
@@ -174,14 +161,11 @@ Route::middleware('auth')->group(function () {
 });
 
 // Report Routes (Public and Authenticated)
-
 Route::post('/reports', [ReportController::class, 'store'])->name('reports.store');
-// Route::get('/reports/success', [ReportController::class, 'success'])->name('reports.success');
 Route::match(['get', 'post'], '/reports/track', [ReportController::class, 'track'])->name('reports.track');
 Route::get('/reports/{report}', [ReportController::class, 'show'])->name('reports.show');
 Route::get('/api/reports/find', [ReportController::class, 'findByTrackingCode'])->name('reports.find');
 Route::get('/reports/create', [ReportController::class, 'create'])->name('reports.create');
-// Route::get('/test/test', [ReportController::class, 'testIndex'])->name('test.test');
 
 Route::get('/debug/customers', function () {
     return User::where('role', 'customer')->get();

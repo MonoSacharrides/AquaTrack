@@ -62,7 +62,7 @@ Route::get('/dashboard', function () {
 // Admin Routes
 Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/admin/dashboard', [AdminDashboardController::class, 'index'])->name('admin.dashboard');
-    
+
     // ADMIN REPORTS ROUTES - Keep these inside the admin middleware
     Route::get('/admin/reports', [ReportController::class, 'adminIndex'])->name('admin.reports');
     Route::delete('/admin/reports/{report}', [ReportController::class, 'destroy'])->name('admin.reports.destroy');
@@ -117,7 +117,7 @@ Route::middleware(['auth', 'role:staff'])->group(function () {
     Route::get('/staff/reading/user/{userId}', [StaffReadingController::class, 'getUserDetails'])->name('staff.reading.user');
     Route::get('/staff/reading/previous/{userId}', [StaffReadingController::class, 'getPreviousReadings'])->name('staff.reading.previous');
     Route::post('/staff/reading', [StaffReadingController::class, 'storeReading'])->name('staff.reading.store');
-    Route::put('/staff/reading/{reading}/update', [StaffReadingController::class, 'updateReading'])->name('staff.reading.update');
+    Route::put('/staff/reading/{readingId}/update', [StaffReadingController::class, 'updateReading'])->name('staff.reading.update');
 
     Route::get('/staff/notifications', function () {
         return Inertia::render('Staff/Notifications', [

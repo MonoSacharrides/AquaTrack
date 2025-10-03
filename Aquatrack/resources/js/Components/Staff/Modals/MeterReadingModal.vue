@@ -41,7 +41,7 @@
                                                 <span
                                                     class="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400">
                                                     <v-icon name="bi-credit-card" class="text-blue-500" />
-                                                    #{{ user.account_number }}
+                                                    {{ user.account_number }}
                                                 </span>
                                                 <span
                                                     class="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400">
@@ -267,7 +267,7 @@
                                     </div>
 
                                     <div v-else class="space-y-3 max-h-[300px] overflow-y-auto">
-                                        <div v-for="(reading, index) in filteredPreviousReadings" :key="index"
+                                        <div v-for="(reading, index) in filteredPreviousReadings" :key="reading.id"
                                             class="bg-gray-50 dark:bg-gray-600 p-3 rounded-lg border border-gray-200 dark:border-gray-500 hover:border-blue-200 dark:hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors group relative">
                                             <!-- Edit Button -->
                                             <button @click="openEditModal(reading)"
@@ -356,13 +356,8 @@
     </transition>
 
     <!-- Edit Reading Modal -->
-     <EditMeterRecordModal
-        :show="showEditModal"
-        :record="selectedReading"
-        :user="user"
-        @close="closeEditModal"
-        @saved="handleReadingUpdated"
-    />
+    <EditMeterRecordModal :show="showEditModal" :record="selectedReading" :user="user" @close="closeEditModal"
+        @saved="handleReadingUpdated" />
 </template>
 
 <script setup>
@@ -726,9 +721,13 @@ const closeEditModal = () => {
     selectedReading.value = null;
 };
 
-const handleReadingUpdated = () => {
-    // Refresh the readings list to show updated data
-    fetchPreviousReadings();
+const handleReadingUpdated = async (updatedReading) => {
+    // Refresh the entire readings list to get updated data
+    await fetchPreviousReadings();
+
+    // Update the previous reading calculation
+    updatePreviousReading();
+
     closeEditModal();
 };
 

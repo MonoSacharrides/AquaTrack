@@ -128,6 +128,31 @@ class ReportController extends Controller
     }
 
     /**
+     * Format user types for display
+     */
+    protected function formatUserTypes($userTypesJson)
+    {
+        if (!$userTypesJson) {
+            return Auth::check() ? 'Registered' : 'Guest';
+        }
+        
+        $userTypes = json_decode($userTypesJson, true);
+        
+        if (!is_array($userTypes) || empty($userTypes)) {
+            return Auth::check() ? 'Registered' : 'Guest';
+        }
+        
+        // Remove duplicates and sort
+        $userTypes = array_unique($userTypes);
+        usort($userTypes, function($a, $b) {
+            $order = ['Registered' => 1, 'Guest' => 2];
+            return ($order[$a] ?? 3) - ($order[$b] ?? 4);
+        });
+        
+        return implode(', ', $userTypes);
+    }
+
+    /**
      * Find existing report for merging
      */
     protected function findExistingReportForMerging($zone, $barangay, $issueType, $latitude, $longitude, $purok)
@@ -290,6 +315,12 @@ class ReportController extends Controller
                     $existingUserTypes[] = $currentUserType;
                 }
                 
+                // Sort for consistent display: Registered first, then Guest
+                usort($existingUserTypes, function($a, $b) {
+                    $order = ['Registered' => 1, 'Guest' => 2];
+                    return ($order[$a] ?? 3) - ($order[$b] ?? 4);
+                });
+
                 $existingReport->user_types = json_encode($existingUserTypes);
 
                 // Update reporter phones
@@ -647,7 +678,12 @@ class ReportController extends Controller
             }
 
             $reports = $query->paginate(5)
-                ->appends($request->query());
+                ->appends($request->query())
+                ->through(function ($report) {
+                    // Format user_types for display
+                    $report->formatted_user_types = $this->formatUserTypes($report->user_types);
+                    return $report;
+                });
 
             // Handle pre-selected report
             $selectedReport = null;
@@ -655,6 +691,9 @@ class ReportController extends Controller
                 $selectedReport = Report::with(['photos', 'user'])->find($request->input('report_id'));
                 if (!$selectedReport || $selectedReport->deleted_at) {
                     $selectedReport = null;
+                } else {
+                    // Format user_types for selected report
+                    $selectedReport->formatted_user_types = $this->formatUserTypes($selectedReport->user_types);
                 }
             }
 
@@ -725,6 +764,9 @@ class ReportController extends Controller
                 ]);
             }
 
+            // Format user_types for display
+            $report->formatted_user_types = $this->formatUserTypes($report->user_types);
+
             return Inertia::render('Reports/Track', [
                 'report' => $report,
             ]);
@@ -770,6 +812,9 @@ class ReportController extends Controller
                     'reason' => $report->status,
                 ], 410);
             }
+
+            // Format user_types for display
+            $report->formatted_user_types = $this->formatUserTypes($report->user_types);
 
             return response()->json([
                 'success' => true,

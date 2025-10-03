@@ -114,8 +114,8 @@
                                         </label>
                                         <input v-model="form.amount" type="number" step="0.01" min="0"
                                             class="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 focus:border-blue-500"
-                                            :class="{ 'border-red-300 dark:border-red-500': form.errors.amount }" required
-                                            @input="validateAmount" />
+                                            :class="{ 'border-red-300 dark:border-red-500': form.errors.amount }"
+                                            required @input="validateAmount" />
                                         <p v-if="form.errors.amount" class="text-red-500 text-xs mt-1">{{
                                             form.errors.amount }}</p>
                                     </div>
@@ -226,11 +226,12 @@ const statusOptions = [
     },
 ];
 
-// Initialize form
+// Initialize form with all required fields
 const form = useForm({
     reading: props.record?.reading || 0,
     amount: props.record?.amount || 0,
     status: props.record?.status || 'Pending',
+    consumption: props.record?.consumption || 0,
 });
 
 const isSubmitting = ref(false);
@@ -244,6 +245,7 @@ watch(
             form.reading = newRecord.reading;
             form.amount = newRecord.amount;
             form.status = newRecord.status;
+            form.consumption = newRecord.consumption;
             hasUnsavedChanges.value = false;
         }
     },
@@ -257,6 +259,17 @@ watch(
         hasUnsavedChanges.value = true;
     },
     { deep: true }
+);
+
+// Watch reading changes to auto-calculate amount
+watch(
+    () => form.reading,
+    (newReading) => {
+        if (newReading !== '' && !isNaN(newReading)) {
+            // Auto-calculate the amount based on consumption
+            form.amount = calculatedAmount.value;
+        }
+    }
 );
 
 // Computed properties
@@ -293,6 +306,7 @@ const isFormValid = computed(() => {
     return (
         form.reading !== '' &&
         form.amount !== '' &&
+        form.status !== '' &&
         current >= previous &&
         form.amount >= 0
     );
@@ -319,6 +333,8 @@ const validateReading = () => {
         form.errors.reading = 'Reading is required';
     } else {
         form.errors.reading = '';
+        // Auto-update the amount when reading is valid
+        form.amount = calculatedAmount.value;
     }
 };
 
@@ -355,6 +371,7 @@ const confirmClose = () => {
     }
 };
 
+
 const submitForm = async () => {
     if (!isFormValid.value) return;
 
@@ -383,7 +400,9 @@ const submitForm = async () => {
                    <div class="text-left">
                      <strong>Billing Month:</strong> ${props.record.billing_month} ${props.record.year}<br>
                      <strong>Reading:</strong> ${form.reading} m³<br>
+                     <strong>Consumption:</strong> ${calculatedConsumption.value} m³<br>
                      <strong>Amount:</strong> ₱${parseFloat(form.amount).toFixed(2)}<br>
+                     <strong>Status:</strong> ${form.status}<br>
                    </div>`,
             icon: 'question',
             showCancelButton: true,
@@ -394,21 +413,13 @@ const submitForm = async () => {
             customClass: {
                 popup: '!z-[1300]',
                 container: '!z-[1300]'
-            },
-            didOpen: () => {
-                // Ensure SweetAlert is on top
-                const popup = Swal.getPopup();
-                if (popup) {
-                    popup.style.zIndex = '1300';
-                }
             }
         });
 
         if (result.isConfirmed) {
-            // Update the record via API
-            const response = await axios.put(route('staff.reading.update', { reading: props.record.id }), {
-                reading: form.reading,
-                amount: form.amount,
+            const response = await axios.put(route('staff.reading.update', { readingId: props.record.id }), {
+                reading: parseFloat(form.reading),
+                amount: parseFloat(form.amount),
                 status: form.status,
                 consumption: calculatedConsumption.value
             });
@@ -431,7 +442,8 @@ const submitForm = async () => {
                 }
             });
 
-            emit('saved');
+            // Emit the updated reading data so parent can refresh
+            emit('saved', response.data.reading);
         }
     } catch (error) {
         console.error('Error updating reading:', error);
@@ -448,6 +460,7 @@ const submitForm = async () => {
         isSubmitting.value = false;
     }
 };
+
 </script>
 
 <style scoped>

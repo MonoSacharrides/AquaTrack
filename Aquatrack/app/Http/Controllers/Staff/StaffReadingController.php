@@ -169,9 +169,22 @@ class StaffReadingController extends Controller
                 'updated_at' => now(),
             ]);
 
+            // Refresh the reading to get updated data
+            $reading->refresh();
+
             return response()->json([
                 'message' => 'Reading updated successfully',
-                'reading' => $reading
+                'reading' => [
+                    'id' => $reading->id,
+                    'billing_month' => $reading->billing_month,
+                    'reading_date' => $reading->reading_date ? Carbon::parse($reading->reading_date)->format('Y-m-d') : 'N/A',
+                    'reading' => $reading->reading,
+                    'previous_reading' => $reading->previous_reading,
+                    'consumption' => $reading->consumption,
+                    'amount' => $reading->amount,
+                    'status' => $reading->status,
+                    'year' => $reading->reading_date ? Carbon::parse($reading->reading_date)->format('Y') : date('Y')
+                ]
             ]);
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
             return response()->json(['error' => 'Reading not found'], 404);
